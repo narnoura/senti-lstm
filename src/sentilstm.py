@@ -1,8 +1,10 @@
 from dynet import *
+import random
+from random import shuffle
 import os, codecs, pickle,time
 from optparse import OptionParser
 import numpy as np
-
+#import gensim
 
 class SentiLSTM:
     @staticmethod
@@ -29,12 +31,21 @@ class SentiLSTM:
         self.trainer = AdamTrainer(self.model)
         self.lstm_dims = options.lstm_dims
         self.num_labels = 2
+        #What is the difference between self.dim (embedding dimension, e.g 300) and lstm_dims? (prob this means nb_input units)
 
         if options.train_data != None:
             labels = set()
             tf = codecs.open(os.path.abspath(options.train_data), 'r')
             for row in tf:
-                labels.add(row.strip().split('\t')[1])
+                l = row.strip().split('\t')[1]
+                if l == "pos":   # for consistency
+                    l = "1"
+                elif l == "neg":
+                    l = "0"
+                elif l == "neutral":
+                    l = "2"
+                labels.add(l)
+                #labels.add(row.strip().split('\t')[1])
             tf.close()
 
             self.rev_labels = list(labels)
@@ -46,8 +57,13 @@ class SentiLSTM:
             to_save_params.append(self.rev_labels)
             to_save_params.append(self.label_dict)
             to_save_params.append(self.num_labels)
+            # Load embeddings
             fp = codecs.open(os.path.abspath(options.embed), 'r')
+            #if ".bin" in options.embed:
+             #   vectors = gensim.models.Word2Vec.load_word2vec_format(options.embed,binary=True)
+              #  matrix = vectors.syn0
             fp.readline()
+            # TODO if bin file load bin embeddings
             embed = {line.split(' ')[0]: [float(f) for f in line.strip().split(' ')[1:]] for line in fp}
             fp.close()
             self.dim = len(embed.values()[0])
@@ -56,7 +72,7 @@ class SentiLSTM:
             self.embed_lookup.set_updated(False)
             for word, i in self.word_dict.iteritems():
                 self.embed_lookup.init_row(i, embed[word])
-            self.embed_lookup.init_row(0, [0]*self.dim)
+            self.embed_lookup.init_row(0, [0]*self.dim) # embedding for 0
             to_save_params.append(self.word_dict)
             to_save_params.append(self.dim)
             print 'Loaded word embeddings. Vector dimensions:', self.dim
@@ -110,15 +126,23 @@ class SentiLSTM:
 
         for train_line in train_lines:
             words,label = train_line.strip().split('\t')
+            if label == "pos":   # for consistency
+                label = "1"
+            elif label == "neg":
+                label = "0"
+            elif label == "neutral":
+                label = "2"
             label = self.label_dict[label]
             tokens = words.split()
             words = []
             for w in tokens:
                 orig,trans = w,''
                 if '|||' in w:
-                    orig = w[:w.rfind('|||')]
-                    trans = w[w.rfind('|||')+4:]
-
+                    orig = w[:w.rfind('|||')] # orig: English
+                    trans = w[w.rfind('|||')+4:]  # trans: Uyghur
+                elif '||' in w:         # In this part, first word is Uyghur and second is POS
+                    trans = w[:w.rfind('||')]   # Uyghur
+                    pos = w[w.rfind('||')+3:]   # POS
                 if trans in self.word_dict:
                     words.append(self.word_dict[trans])
                 elif orig in self.word_dict:
@@ -132,7 +156,7 @@ class SentiLSTM:
 
             input = concatenate([fw[-1],bw[-1]])
             if H2:
-                r_t = O * rectify(dropout(H2 * (rectify(dropout(H1 * input,0.5))),0.5))
+                r_t = O * rectify(dropout(H2 * (rectify(dropout(H1 * input,0.5))),0.5)) #what does dropout do?
             else:
                 r_t = O * (rectify(dropout(H1 * input,0.5)))
             err = pickneglogsoftmax(r_t, label)
@@ -146,7 +170,10 @@ class SentiLSTM:
         i = 0
         loss = 0
         start = time.time()
-        for row in tf:
+        rows = tf.readlines()
+        shuffle(rows)
+        #for row in tf:
+        for row in rows:
             instances.append(row)
             if len(instances)>=self.batchsize:
                 errs = self.build_graph(instances)
@@ -164,13 +191,19 @@ class SentiLSTM:
                     sz = 0
                     loss = 0
 
-                    if options.dev_data != None:
+                    if options.dev_data != None: # Done for every batch
                         correct = 0
                         all_dev_num = 0
                         fp = codecs.open(options.dev_data,'r')
                         for line in fp:
                             all_dev_num += 1
                             sentence,label = line.strip().split('\t')
+                            if label == "pos":   # for consistency
+                                label = "1"
+                            elif label == "neg":
+                                label = "0"
+                            elif label == "neutral":
+                                label = "2"
                             predicted = self.predict(sentence.strip())
                             if predicted == label:
                                 correct += 1
@@ -178,12 +211,12 @@ class SentiLSTM:
                         print 'acc', acc
                         if acc>best_acc:
                             best_acc = acc
-                            print 'saving best accurary', best_acc
+                            print 'saving best accuracy', best_acc
                             self.model.save(os.path.join(options.output, options.model))
                 errs = []
                 instances = []
                 renew_cg()
-        if len(instances)>=0:
+        if len(instances)>=0: # why are we doing this again?
             errs = self.build_graph(instances)
             sum_errs = esum(errs)
             squared = -sum_errs  # * sum_errs
@@ -203,6 +236,12 @@ class SentiLSTM:
                 for line in fp:
                     all_dev_num += 1
                     sentence, label = line.strip().split('\t')
+                    if label == "pos":   # for consistency
+                        label = "1"
+                    elif label == "neg":
+                        label = "0"
+                    elif label == "neutral":
+                        label = "2"
                     predicted = self.predict(sentence.strip())
                     if predicted == label:
                         correct += 1
@@ -244,21 +283,30 @@ class SentiLSTM:
 if __name__ == '__main__':
     (options, args) = SentiLSTM.parse_options()
     senti_lstm = SentiLSTM(options)
+    #random.seed(23) # to use the same random number everytime. not sure if we have to do this.
 
     if options.train_data!=None:
         best_acc = float('-inf')
         for i in xrange(options.epochs):
             best_acc = senti_lstm.train(options, best_acc)
             print 'saving for iteration',i
+            print 'best accuracy for iteration', i, best_acc
             senti_lstm.model.save(os.path.join(options.output, options.model+'_iter_'+str(i)))
-    if options.input_data != None:
+    if options.input_data != None:  # blind input
         fp = codecs.open(os.path.abspath(options.input_data), 'r')
         fw = codecs.open(os.path.abspath(options.output_data), 'w')
         i = 0
         start = time.time()
         for line in fp:
            sen = line.strip().split('\t')[0]
-           fw.write(sen+'\t'+senti_lstm.predict(sen)+'\n')
+           label = senti_lstm.predict(sen)
+           if label == '1':
+               label = 'pos'
+           elif label == '0':
+               label = 'neg'
+           elif label == '2':
+               label = 'neutral';
+           fw.write(sen+'\t'+label+'\n')
            i += 1
            if i%100==0: sys.stdout.write(str(i)+'...')
         fw.close()
