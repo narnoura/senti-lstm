@@ -1,9 +1,10 @@
 from dynet import *
+import random
 from random import shuffle
 import os, codecs, pickle,time
 from optparse import OptionParser
 import numpy as np
-
+#import gensim
 
 class SentiLSTM:
     @staticmethod
@@ -30,7 +31,7 @@ class SentiLSTM:
         self.trainer = AdamTrainer(self.model)
         self.lstm_dims = options.lstm_dims
         self.num_labels = 2
-        #What is the difference between self.dim and lstm_dims?
+        #What is the difference between self.dim (embedding dimension, e.g 300) and lstm_dims? (prob this means nb_input units)
 
         if options.train_data != None:
             labels = set()
@@ -58,7 +59,11 @@ class SentiLSTM:
             to_save_params.append(self.num_labels)
             # Load embeddings
             fp = codecs.open(os.path.abspath(options.embed), 'r')
+            #if ".bin" in options.embed:
+             #   vectors = gensim.models.Word2Vec.load_word2vec_format(options.embed,binary=True)
+              #  matrix = vectors.syn0
             fp.readline()
+            # TODO if bin file load bin embeddings
             embed = {line.split(' ')[0]: [float(f) for f in line.strip().split(' ')[1:]] for line in fp}
             fp.close()
             self.dim = len(embed.values()[0])
@@ -82,7 +87,6 @@ class SentiLSTM:
             self.H2 = None if self.hid2_dim == 0 else self.model.add_parameters((self.hid2_dim, self.hid_dim))
             last_hid_dims = self.hid2_dim if self.hid2_dim > 0 else self.hid_dim
             self.O = self.model.add_parameters((self.num_labels, last_hid_dims))
-            # 3 layers?
             to_save_params.append(self.hid_dim)
             to_save_params.append(self.hid2_dim)
             to_save_params.append(self.hid_inp_dim)
@@ -167,7 +171,7 @@ class SentiLSTM:
         loss = 0
         start = time.time()
         rows = tf.readlines()
-        shuffle(rows) # should seed be constant?
+        shuffle(rows)
         #for row in tf:
         for row in rows:
             instances.append(row)
@@ -207,7 +211,7 @@ class SentiLSTM:
                         print 'acc', acc
                         if acc>best_acc:
                             best_acc = acc
-                            print 'saving best accurary', best_acc
+                            print 'saving best accuracy', best_acc
                             self.model.save(os.path.join(options.output, options.model))
                 errs = []
                 instances = []
@@ -279,12 +283,14 @@ class SentiLSTM:
 if __name__ == '__main__':
     (options, args) = SentiLSTM.parse_options()
     senti_lstm = SentiLSTM(options)
+    #random.seed(23) # to use the same random number everytime. not sure if we have to do this.
 
     if options.train_data!=None:
         best_acc = float('-inf')
         for i in xrange(options.epochs):
             best_acc = senti_lstm.train(options, best_acc)
             print 'saving for iteration',i
+            print 'best accuracy for iteration', i, best_acc
             senti_lstm.model.save(os.path.join(options.output, options.model+'_iter_'+str(i)))
     if options.input_data != None:  # blind input
         fp = codecs.open(os.path.abspath(options.input_data), 'r')
@@ -293,7 +299,14 @@ if __name__ == '__main__':
         start = time.time()
         for line in fp:
            sen = line.strip().split('\t')[0]
-           fw.write(sen+'\t'+senti_lstm.predict(sen)+'\n')
+           label = senti_lstm.predict(sen)
+           if label == '1':
+               label = 'pos'
+           elif label == '0':
+               label = 'neg'
+           elif label == '2':
+               label = 'neutral';
+           fw.write(sen+'\t'+label+'\n')
            i += 1
            if i%100==0: sys.stdout.write(str(i)+'...')
         fw.close()
